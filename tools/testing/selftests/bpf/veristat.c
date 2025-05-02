@@ -1282,6 +1282,11 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 {
 	const char *base_filename = basename(strdupa(filename));
 	const char *prog_name = bpf_program__name(prog);
+	enum bpf_prog_type prog_type = bpf_program__type(prog);
+	const struct bpf_insn *insns;
+	size_t insn_cnt;
+	LIBBPF_OPTS(bpf_prog_load_opts, opts);
+	LIBBPF_OPTS(bpf_attach_target_info_opts, attach_opts);
 	char *buf;
 	int buf_sz, log_level;
 	struct verif_stats *stats;
@@ -1325,14 +1330,42 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	bpf_program__set_log_level(prog, log_level);
 
 	/* increase chances of successful BPF object loading */
-	fixup_obj(obj, prog, base_filename);
+	//fixup_obj(obj, prog, base_filename);
 
 	if (env.force_checkpoints)
 		bpf_program__set_flags(prog, bpf_program__flags(prog) | BPF_F_TEST_STATE_FREQ);
 	if (env.force_reg_invariants)
 		bpf_program__set_flags(prog, bpf_program__flags(prog) | BPF_F_TEST_REG_INVARIANTS);
 
-	err = bpf_object__load(obj);
+	opts.prog_btf_fd = btf__fd(bpf_object__btf(obj));
+	opts.line_info = bpf_program__line_info(prog);
+	opts.line_info_rec_size = sizeof(struct bpf_line_info);
+	opts.line_info_cnt = bpf_program__line_info_cnt(prog);
+	opts.func_info = bpf_program__func_info(prog);
+	opts.func_info_cnt = bpf_program__func_info_cnt(prog);
+	opts.func_info_rec_size = sizeof(struct bpf_func_info);
+	opts.expected_attach_type = bpf_program__expected_attach_type(prog);
+
+	err = bpf_program__attach_target_info(prog, &attach_opts);
+	if (!err) {
+		opts.attach_prog_fd = attach_opts.attach_prog_fd;
+		opts.attach_btf_id = attach_opts.attach_btf_id;
+		opts.attach_btf_obj_fd = attach_opts.attach_btf_obj_fd;
+	}
+	err = 0;
+
+	opts.log_buf = buf;
+	opts.log_size = buf_sz;
+	opts.log_level = log_level;
+
+	bpf_program__prepare_load_opts(obj, prog, &opts);
+	insns = bpf_program__insns(prog);
+	insn_cnt = bpf_program__insn_cnt(prog);
+	fd = bpf_prog_load(prog_type, prog_name, "GPL", insns, insn_cnt, &opts);
+	if (fd < 0) {
+		err = fd;
+		fprintf(stderr, "Failed to load program %s %d\n", prog_name, err);
+	}
 	env.progs_processed++;
 
 	stats->file_name = strdup(base_filename);
@@ -1343,7 +1376,6 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	stats->stats[ATTACH_TYPE] = bpf_program__expected_attach_type(prog);
 
 	memset(&info, 0, info_len);
-	fd = bpf_program__fd(prog);
 	if (fd > 0 && bpf_prog_get_info_by_fd(fd, &info, &info_len) == 0)
 		stats->stats[JITED_SIZE] = info.jited_prog_len;
 
@@ -1360,8 +1392,9 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	if (verif_log_buf != buf)
 		free(buf);
 
+	bpf_program__unload(prog);
 	return 0;
-};
+}
 
 static int append_var_preset(struct var_preset **presets, int *cnt, const char *expr)
 {
@@ -1708,11 +1741,11 @@ static int set_global_vars(struct bpf_object *obj, struct var_preset *presets, i
 static int process_obj(const char *filename)
 {
 	const char *base_filename = basename(strdupa(filename));
-	struct bpf_object *obj = NULL, *tobj;
-	struct bpf_program *prog, *tprog, *lprog;
+	struct bpf_object *obj = NULL;
+	struct bpf_program *prog;
 	libbpf_print_fn_t old_libbpf_print_fn;
 	LIBBPF_OPTS(bpf_object_open_opts, opts);
-	int err = 0, prog_cnt = 0;
+	int err = 0;
 
 	if (!should_process_file_prog(base_filename, NULL)) {
 		if (env.verbose)
@@ -1746,53 +1779,28 @@ static int process_obj(const char *filename)
 	}
 
 	env.files_processed++;
-
 	bpf_object__for_each_program(prog, obj) {
-		prog_cnt++;
-	}
-
-	if (prog_cnt == 1) {
-		prog = bpf_object__next_program(obj, NULL);
 		bpf_program__set_autoload(prog, true);
-		err = set_global_vars(obj, env.presets, env.npresets);
-		if (err) {
-			fprintf(stderr, "Failed to set global variables %d\n", err);
-			goto cleanup;
-		}
-		process_prog(filename, obj, prog);
+		if (env.force_checkpoints)
+			bpf_program__set_flags(prog, bpf_program__flags(prog) | BPF_F_TEST_STATE_FREQ);
+		if (env.force_reg_invariants)
+			bpf_program__set_flags(prog, bpf_program__flags(prog) | BPF_F_TEST_REG_INVARIANTS);
+		fixup_obj(obj, prog, base_filename);
+	}
+	err = set_global_vars(obj, env.presets, env.npresets);
+	if (err) {
+		fprintf(stderr, "Failed to set global variables %d\n", err);
 		goto cleanup;
 	}
 
+	err = bpf_object__prepare(obj);
+	if (err) {
+		fprintf(stderr, "Failed to prepare BPF object for loading %d\n", err);
+	}
+	err = 0;
+
 	bpf_object__for_each_program(prog, obj) {
-		const char *prog_name = bpf_program__name(prog);
-
-		tobj = bpf_object__open_file(filename, &opts);
-		if (!tobj) {
-			err = -errno;
-			fprintf(stderr, "Failed to open '%s': %d\n", filename, err);
-			goto cleanup;
-		}
-
-		err = set_global_vars(tobj, env.presets, env.npresets);
-		if (err) {
-			fprintf(stderr, "Failed to set global variables %d\n", err);
-			goto cleanup;
-		}
-
-		lprog = NULL;
-		bpf_object__for_each_program(tprog, tobj) {
-			const char *tprog_name = bpf_program__name(tprog);
-
-			if (strcmp(prog_name, tprog_name) == 0) {
-				bpf_program__set_autoload(tprog, true);
-				lprog = tprog;
-			} else {
-				bpf_program__set_autoload(tprog, false);
-			}
-		}
-
-		process_prog(filename, tobj, lprog);
-		bpf_object__close(tobj);
+		process_prog(filename, obj, prog);
 	}
 
 cleanup:

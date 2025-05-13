@@ -13771,6 +13771,20 @@ int bpf_program__set_attach_target(struct bpf_program *prog,
 	return 0;
 }
 
+int bpf_program__attach_target_info(const struct bpf_program *prog, struct bpf_attach_target_info_opts *opts)
+{
+	if (!opts)
+		return -EINVAL;
+
+	//if (!(prog->sec_def->cookie & SEC_ATTACH_BTF))
+	//	return -EINVAL;
+
+	OPTS_SET(opts, attach_prog_fd, prog->attach_prog_fd);
+	OPTS_SET(opts, attach_btf_obj_fd, prog->attach_btf_obj_fd);
+	OPTS_SET(opts, attach_btf_id, prog->attach_btf_id);
+	return 0;
+}
+
 int parse_cpu_mask_str(const char *s, bool **mask, int *mask_sz)
 {
 	int err = 0, n, len, start, end = -1;

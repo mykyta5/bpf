@@ -42,6 +42,7 @@ void test_module_attach(void)
 	struct bpf_link *link;
 	int err;
 	int writable_val = 0;
+	LIBBPF_OPTS(bpf_attach_target_info_opts, opts);
 
 	skel = test_module_attach__open();
 	if (CHECK(!skel, "skel_open", "failed to open skeleton\n"))
@@ -87,6 +88,11 @@ void test_module_attach(void)
 	ASSERT_EQ(bss->raw_tp_writable_bare_in_val, 1024, "writable_test_in");
 	ASSERT_EQ(bss->raw_tp_writable_bare_out_val, writable_val,
 		  "writable_test_out");
+
+	ASSERT_OK(bpf_program__attach_target_info(skel->progs.handle_tp_btf, &opts), "attach_target_info");
+	ASSERT_GT(opts.attach_btf_id, 0, "attach_btf_id");
+	ASSERT_GE(opts.attach_prog_fd, 0, "attach_prog_fd");
+	ASSERT_GE(opts.attach_btf_obj_fd, 0, "attach_btf_obj_fd");
 
 	test_module_attach__detach(skel);
 

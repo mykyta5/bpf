@@ -961,6 +961,23 @@ LIBBPF_API int
 bpf_program__set_attach_target(struct bpf_program *prog, int attach_prog_fd,
 			       const char *attach_func_name);
 
+struct bpf_attach_target_info_opts {
+	size_t sz;
+	int attach_prog_fd;
+	int attach_btf_obj_fd;
+	int attach_btf_id;
+	size_t :0;
+};
+#define bpf_attach_target_info_opts__last_field attach_btf_id
+
+/**
+ * @brief *bpf_program__attach_target_info()* returns attach target info
+ * @param prog pointer to struct bpf_prog
+ * @param opts pointer to bpf_attach_target_info_opts where result is returned
+ * @return 0 on success, negative error code otherwise
+ */
+LIBBPF_API int bpf_program__attach_target_info(const struct bpf_program *prog, struct bpf_attach_target_info_opts *opts);
+
 /**
  * @brief **bpf_object__find_map_by_name()** returns BPF map of
  * the given name, if it exists within the passed BPF object

@@ -978,6 +978,17 @@ struct bpf_attach_target_info_opts {
  */
 LIBBPF_API int bpf_program__attach_target_info(const struct bpf_program *prog, struct bpf_attach_target_info_opts *opts);
 
+struct bpf_prog_load_opts; /* defined in bpf.h */
+
+/**
+ * @brief **bpf_program__prepare_load_opts()** prepares bpf_prog_load_opts for loading for passed program
+ * @param obj BPF object
+ * @param prog BPF program to load
+ * @param attrs attributes to prepare
+ * @return 0 on success, negative error code otherwise
+ */
+LIBBPF_API int bpf_program__prepare_load_opts(const struct bpf_object *obj, struct bpf_program *prog, struct bpf_prog_load_opts *attrs);
+
 /**
  * @brief **bpf_object__find_map_by_name()** returns BPF map of
  * the given name, if it exists within the passed BPF object

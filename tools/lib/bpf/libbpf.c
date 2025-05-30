@@ -7460,7 +7460,6 @@ static int libbpf_prepare_prog_load(struct bpf_program *prog,
 static void fixup_verifier_log(struct bpf_program *prog, char *buf, size_t buf_sz);
 
 static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog,
-				struct bpf_insn *insns, int insns_cnt,
 				const char *license, __u32 kern_version, int *prog_fd)
 {
 	LIBBPF_OPTS(bpf_prog_load_opts, load_attr);
@@ -7469,7 +7468,7 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 	char *log_buf = NULL, *tmp;
 	bool own_log_buf = true;
 	__u32 log_level = prog->log_level;
-	int ret, err;
+	int ret;
 
 	/* Be more helpful by rejecting programs that can't be validated early
 	 * with more meaningful and actionable error message.
@@ -7494,51 +7493,20 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 		break;
 	}
 
-	if (!insns || !insns_cnt)
+	if (!prog->insns || !prog->insns_cnt)
 		return -EINVAL;
 
 	if (kernel_supports(obj, FEAT_PROG_NAME))
 		prog_name = prog->name;
-	load_attr.attach_prog_fd = prog->attach_prog_fd;
-	load_attr.attach_btf_obj_fd = prog->attach_btf_obj_fd;
-	load_attr.attach_btf_id = prog->attach_btf_id;
+
+	bpf_program__prepare_load_opts(obj, prog, &load_attr);
+
 	load_attr.kern_version = kern_version;
-	load_attr.prog_ifindex = prog->prog_ifindex;
-	load_attr.expected_attach_type = prog->expected_attach_type;
-
-	/* specify func_info/line_info only if kernel supports them */
-	if (obj->btf && btf__fd(obj->btf) >= 0 && kernel_supports(obj, FEAT_BTF_FUNC)) {
-		load_attr.prog_btf_fd = btf__fd(obj->btf);
-		load_attr.func_info = prog->func_info;
-		load_attr.func_info_rec_size = prog->func_info_rec_size;
-		load_attr.func_info_cnt = prog->func_info_cnt;
-		load_attr.line_info = prog->line_info;
-		load_attr.line_info_rec_size = prog->line_info_rec_size;
-		load_attr.line_info_cnt = prog->line_info_cnt;
-	}
 	load_attr.log_level = log_level;
-	load_attr.prog_flags = prog->prog_flags;
-	load_attr.fd_array = obj->fd_array;
-
-	load_attr.token_fd = obj->token_fd;
-	if (obj->token_fd)
-		load_attr.prog_flags |= BPF_F_TOKEN_FD;
-
-	/* adjust load_attr if sec_def provides custom preload callback */
-	if (prog->sec_def && prog->sec_def->prog_prepare_load_fn) {
-		err = prog->sec_def->prog_prepare_load_fn(prog, &load_attr, prog->sec_def->cookie);
-		if (err < 0) {
-			pr_warn("prog '%s': failed to prepare load attributes: %s\n",
-				prog->name, errstr(err));
-			return err;
-		}
-		insns = prog->insns;
-		insns_cnt = prog->insns_cnt;
-	}
 
 	if (obj->gen_loader) {
 		bpf_gen__prog_load(obj->gen_loader, prog->type, prog->name,
-				   license, insns, insns_cnt, &load_attr,
+				   license, prog->insns, prog->insns_cnt, &load_attr,
 				   prog - obj->programs);
 		*prog_fd = -1;
 		return 0;
@@ -7576,7 +7544,7 @@ retry_load:
 	load_attr.log_size = log_buf_size;
 	load_attr.log_level = log_level;
 
-	ret = bpf_prog_load(prog->type, prog_name, license, insns, insns_cnt, &load_attr);
+	ret = bpf_prog_load(prog->type, prog_name, license, prog->insns, prog->insns_cnt, &load_attr);
 	if (ret >= 0) {
 		if (log_level && own_log_buf) {
 			pr_debug("prog '%s': -- BEGIN PROG LOAD LOG --\n%s-- END PROG LOAD LOG --\n",
@@ -7907,8 +7875,7 @@ bpf_object__load_progs(struct bpf_object *obj, int log_level)
 		if (obj->gen_loader)
 			bpf_program_record_relos(prog);
 
-		err = bpf_object_load_prog(obj, prog, prog->insns, prog->insns_cnt,
-					   obj->license, obj->kern_version, &prog->fd);
+		err = bpf_object_load_prog(obj, prog, obj->license, obj->kern_version, &prog->fd);
 		if (err) {
 			pr_warn("prog '%s': failed to load: %s\n", prog->name, errstr(err));
 			return err;
@@ -13783,6 +13750,48 @@ int bpf_program__attach_target_info(const struct bpf_program *prog, struct bpf_a
 	OPTS_SET(opts, attach_btf_obj_fd, prog->attach_btf_obj_fd);
 	OPTS_SET(opts, attach_btf_id, prog->attach_btf_id);
 	return 0;
+}
+
+int bpf_program__prepare_load_opts(const struct bpf_object *obj, struct bpf_program *prog,
+				   struct bpf_prog_load_opts *attr)
+{
+	int err = 0;
+
+	attr->attach_prog_fd = prog->attach_prog_fd;
+	attr->attach_btf_obj_fd = prog->attach_btf_obj_fd;
+	attr->attach_btf_id = prog->attach_btf_id;
+	//attr->kern_version = kern_version;
+	attr->prog_ifindex = prog->prog_ifindex;
+	attr->expected_attach_type = prog->expected_attach_type;
+
+	/* specify func_info/line_info only if kernel supports them */
+	if (obj->btf && btf__fd(obj->btf) >= 0 && kernel_supports(obj, FEAT_BTF_FUNC)) {
+		attr->prog_btf_fd = btf__fd(obj->btf);
+		attr->func_info = prog->func_info;
+		attr->func_info_rec_size = prog->func_info_rec_size;
+		attr->func_info_cnt = prog->func_info_cnt;
+		attr->line_info = prog->line_info;
+		attr->line_info_rec_size = prog->line_info_rec_size;
+		attr->line_info_cnt = prog->line_info_cnt;
+	}
+	attr->prog_flags = prog->prog_flags;
+	attr->fd_array = obj->fd_array;
+
+	attr->token_fd = obj->token_fd;
+	if (obj->token_fd)
+		attr->prog_flags |= BPF_F_TOKEN_FD;
+
+	/* adjust attr if sec_def provides custom preload callback */
+	if (prog->sec_def && prog->sec_def->prog_prepare_load_fn) {
+		err = prog->sec_def->prog_prepare_load_fn(prog, attr, prog->sec_def->cookie);
+		if (err < 0) {
+			pr_warn("prog '%s': failed to prepare load attributes: %s\n",
+				prog->name, errstr(err));
+			return err;
+		}
+	}
+
+	return err;
 }
 
 int parse_cpu_mask_str(const char *s, bool **mask, int *mask_sz)

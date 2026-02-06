@@ -225,6 +225,7 @@ static void bpf_map_ptr_store(struct bpf_insn_aux_data *aux,
 			      struct bpf_map *map,
 			      bool unpriv, bool poison)
 {
+  printk("hello");
 	unpriv |= bpf_map_ptr_unpriv(aux);
 	aux->map_ptr_state.unpriv = unpriv;
 	aux->map_ptr_state.poison = poison;
